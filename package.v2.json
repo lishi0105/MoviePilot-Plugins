@@ -1,0 +1,16 @@
+{
+  "JavOrganizer": {
+    "name": "私密影片整理",
+    "description": "扫描指定目录，识别私密影片编码，生成NFO和图片，并整理到指定媒体库。如果识别失败，通过ffmpeg截图并保底整理。",
+    "labels": "整理",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/organize.png",
+    "author": "lishi0105",
+    "level": 1,
+    "history": {
+      "0.1.0": "初版：支持私密视频目录扫描、稳定判断、编码识别、NFO、截图、迁移和保底整理。",
+      "0.2.0": "更新：增加设置功能",
+      "1.0.0": "完善扫描机制，增加稳定检测和处理"
+    }
+  }
+}
