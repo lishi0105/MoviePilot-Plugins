@@ -642,6 +642,7 @@ class JavOrganizer(_PluginBase):
         mode: str,
         success: bool,
         errmsg: Optional[str] = None,
+        verbose_log: bool = False,
     ) -> bool:
         if not self._save_history:
             return False
@@ -654,6 +655,7 @@ class JavOrganizer(_PluginBase):
             success=success,
             errmsg=errmsg,
             downloader="JavOrganizer",
+            verbose_log=verbose_log,
         )
 
     def _start_processor(self) -> None:

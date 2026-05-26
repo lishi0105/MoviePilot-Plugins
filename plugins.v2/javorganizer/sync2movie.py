@@ -120,6 +120,7 @@ def sync_transfer_history(
     season: Optional[str] = None,
     episode: Optional[str] = None,
     downloader: str = "JavOrganizer",
+    verbose_log: bool = False,
 ) -> bool:
     """
     Best-effort sync to MoviePilot transfer history.
@@ -211,7 +212,8 @@ def sync_transfer_history(
             ],
         )
 
-        mp_logger.info(
+        log_fn = mp_logger.info if verbose_log else mp_logger.debug
+        log_fn(
             f"{downloader}: 已同步整理记录到 MoviePilot："
             f"{src} -> {dest}，size={transfer_size}"
         )

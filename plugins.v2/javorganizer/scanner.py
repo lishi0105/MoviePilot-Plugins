@@ -45,6 +45,9 @@ class ScanConfig:
     refresh_cooldown_seconds: int = 60
 
 
+VERBOSE_CANDIDATE_THRESHOLD = 50
+
+
 class RunSource(str, enum.Enum):
     SCHEDULED = "scheduled"
     IMMEDIATE = "immediate"
@@ -121,6 +124,7 @@ class JavOrganizerProcessor:
         self._round_thread: Optional[threading.Thread] = None
         self._last_refresh_at = 0.0
         self._last_refresh_dest_path: Optional[str] = None
+        self._verbose_file_logs = False
         self.last_result = ScanResult()
 
     def start(self) -> None:
@@ -206,11 +210,88 @@ class JavOrganizerProcessor:
         return result
 
     def _phase_scan(self, result: ScanResult) -> list[RoundCandidate]:
-        self._log("info", "【扫描阶段】开始全量扫描配置目录。")
+        self._log("info", "【扫描阶段】开始统计过滤后候选文件数量。")
+        videos = self._collect_scan_videos(result)
+        if self._should_abort_round():
+            return []
+
+        precount = self._count_scan_candidates(videos)
+        self._apply_round_log_mode(precount)
+        self._log(
+            "info",
+            f"【扫描阶段】过滤后候选={precount}，开始扫描 {len(videos)} 个视频文件。",
+        )
+
         candidates: list[RoundCandidate] = []
         now = time.time()
         last_progress = now
 
+        for path, mapping in videos:
+            if self._should_abort_round():
+                break
+
+            result.seen += 1
+            self._log_detail(f"扫描命中视频：{path}")
+
+            is_candidate, stat_pair, skip_reason, error = self._evaluate_scan_file(path)
+            if skip_reason == "excluded":
+                result.skipped += 1
+                self._log_detail(f"扫描跳过（排除规则）：{path}")
+                last_progress = self._tick_scan_progress(result, last_progress)
+                continue
+
+            if skip_reason == "abnormal":
+                result.abnormal += 1
+                self._log("warning", f"扫描异常：{path} - {error}")
+                last_progress = self._tick_scan_progress(result, last_progress)
+                continue
+
+            if stat_pair is None:
+                last_progress = self._tick_scan_progress(result, last_progress)
+                continue
+
+            size, mtime = stat_pair
+
+            if skip_reason == "success":
+                result.skipped += 1
+                self._log_detail(f"扫描跳过（已成功处理相同版本）：{path}")
+                last_progress = self._tick_scan_progress(result, last_progress)
+                continue
+
+            if not is_candidate:
+                last_progress = self._tick_scan_progress(result, last_progress)
+                continue
+
+            candidate = RoundCandidate(
+                path=path,
+                dst_dir=mapping.dst_dir,
+                size=size,
+                mtime=mtime,
+                first_seen=now,
+                last_check_at=0.0,
+            )
+            candidates.append(candidate)
+            result.candidates += 1
+            self._log_detail(f"扫描入队候选：{path}")
+            try:
+                self.storage.upsert_pending(path, size, mtime)
+            except StorageError:
+                raise
+
+            last_progress = self._tick_scan_progress(result, last_progress)
+
+        if not self._verbose_file_logs:
+            self._log_scan_progress(result)
+        self._log(
+            "info",
+            f"【扫描阶段】完成：已扫描={result.seen}, 候选={result.candidates}, "
+            f"跳过={result.skipped}, 异常={result.abnormal}。"
+            f"本轮候选快照已锁定，后续稳定检测与处理仅针对以上候选文件。",
+        )
+        return candidates
+
+    def _collect_scan_videos(self, result: ScanResult) -> list[tuple[Path, DirectoryMapping]]:
+        videos: list[tuple[Path, DirectoryMapping]] = []
         for mapping in self.config.monitor_dirs:
             if self._should_abort_round():
                 break
@@ -227,67 +308,43 @@ class JavOrganizerProcessor:
             for path in paths:
                 if self._should_abort_round():
                     break
-                if not path.is_file():
-                    continue
-                if not is_video_file(path):
-                    continue
+                if path.is_file() and is_video_file(path):
+                    videos.append((path, mapping))
+        return videos
 
-                result.seen += 1
-                self._log("debug", f"扫描命中视频：{path}")
+    def _count_scan_candidates(self, videos: list[tuple[Path, DirectoryMapping]]) -> int:
+        count = 0
+        for path, _mapping in videos:
+            is_candidate, _stat_pair, skip_reason, _error = self._evaluate_scan_file(path)
+            if is_candidate and not skip_reason:
+                count += 1
+        return count
 
-                if self._is_excluded(path):
-                    result.skipped += 1
-                    self._log("debug", f"扫描跳过（排除规则）：{path}")
-                    last_progress = self._tick_scan_progress(result, last_progress)
-                    continue
+    def _evaluate_scan_file(
+        self,
+        path: Path,
+    ) -> tuple[bool, Optional[tuple[int, float]], str, str]:
+        """
+        评估单个视频文件在扫描阶段的处置。
 
-                try:
-                    stat = path.stat()
-                except PermissionError as exc:
-                    result.abnormal += 1
-                    self._log("warning", f"扫描异常（无权限）：{path} - {exc}")
-                    last_progress = self._tick_scan_progress(result, last_progress)
-                    continue
-                except OSError as exc:
-                    result.abnormal += 1
-                    self._log("warning", f"扫描异常：{path} - {exc}")
-                    last_progress = self._tick_scan_progress(result, last_progress)
-                    continue
+        返回 (is_candidate, (size, mtime), skip_reason, error_message)。
+        skip_reason: 空串=候选; excluded/success/abnormal=跳过原因。
+        """
+        if self._is_excluded(path):
+            return False, None, "excluded", ""
 
-                size = int(stat.st_size)
-                mtime = float(stat.st_mtime)
+        try:
+            stat = path.stat()
+        except PermissionError as exc:
+            return False, None, "abnormal", str(exc)
+        except OSError as exc:
+            return False, None, "abnormal", str(exc)
 
-                if self.storage.is_success_version(path, size, mtime):
-                    result.skipped += 1
-                    self._log("debug", f"扫描跳过（已成功处理相同版本）：{path}")
-                    last_progress = self._tick_scan_progress(result, last_progress)
-                    continue
-
-                candidate = RoundCandidate(
-                    path=path,
-                    dst_dir=mapping.dst_dir,
-                    size=size,
-                    mtime=mtime,
-                    first_seen=now,
-                    last_check_at=0.0,
-                )
-                candidates.append(candidate)
-                result.candidates += 1
-                try:
-                    self.storage.upsert_pending(path, size, mtime)
-                except StorageError:
-                    raise
-
-                last_progress = self._tick_scan_progress(result, last_progress)
-
-        self._log_scan_progress(result)
-        self._log(
-            "info",
-            f"【扫描阶段】完成：已扫描={result.seen}, 候选={result.candidates}, "
-            f"跳过={result.skipped}, 异常={result.abnormal}。"
-            f"本轮候选快照已锁定，后续稳定检测与处理仅针对以上候选文件。",
-        )
-        return candidates
+        size = int(stat.st_size)
+        mtime = float(stat.st_mtime)
+        if self.storage.is_success_version(path, size, mtime):
+            return False, (size, mtime), "success", ""
+        return True, (size, mtime), "", ""
 
     def _phase_stability(self, candidates: list[RoundCandidate], result: ScanResult) -> None:
         if not candidates:
@@ -329,7 +386,7 @@ class JavOrganizerProcessor:
                         self.storage.mark_missing(candidate.path, candidate.size, candidate.mtime)
                     except StorageError:
                         raise
-                    self._log("debug", f"稳定检测：文件消失 -> missing：{candidate.path}")
+                    self._log_detail(f"稳定检测：文件消失 -> missing：{candidate.path}")
                     continue
 
                 try:
@@ -349,7 +406,7 @@ class JavOrganizerProcessor:
                     candidate.baseline_size = current_size
                     candidate.baseline_mtime = current_mtime
                     candidate.stable_hits = 0
-                    self._log("debug", f"稳定检测基线：{candidate.path} size={current_size}")
+                    self._log_detail(f"稳定检测基线：{candidate.path} size={current_size}")
                     pending_left += 1
                     continue
 
@@ -359,8 +416,7 @@ class JavOrganizerProcessor:
                 )
                 if unchanged:
                     candidate.stable_hits += 1
-                    self._log(
-                        "debug",
+                    self._log_detail(
                         f"稳定检测命中：{candidate.path} "
                         f"hits={candidate.stable_hits}/{required_hits}",
                     )
@@ -370,8 +426,7 @@ class JavOrganizerProcessor:
                     candidate.baseline_mtime = current_mtime
                     candidate.size = current_size
                     candidate.mtime = current_mtime
-                    self._log(
-                        "debug",
+                    self._log_detail(
                         f"稳定检测重置：{candidate.path} size={current_size}",
                     )
 
@@ -379,24 +434,25 @@ class JavOrganizerProcessor:
                     candidate.status = CandidateStatus.STABLE
                     result.stable += 1
                     newly_stable += 1
-                    self._log("debug", f"稳定检测通过 -> stable：{candidate.path}")
+                    self._log_detail(f"稳定检测通过 -> stable：{candidate.path}")
                 else:
                     pending_left += 1
 
-            if newly_stable > 0:
-                self._log(
-                    "info",
-                    f"【稳定检测进度】本周期新增稳定={newly_stable}，累计稳定={result.stable}，"
-                    f"待检测={pending_left}，消失={result.missing}，总数={len(candidates)}",
-                )
-                last_progress = now
-            elif now - last_progress >= self.config.scan_progress_interval_seconds:
-                self._log(
-                    "info",
-                    f"【稳定检测进度】稳定={result.stable}, 待检测={pending_left}, "
-                    f"消失={result.missing}, 总数={len(candidates)}",
-                )
-                last_progress = now
+            if not self._verbose_file_logs:
+                if newly_stable > 0:
+                    self._log(
+                        "info",
+                        f"【稳定检测进度】本周期新增稳定={newly_stable}，累计稳定={result.stable}，"
+                        f"待检测={pending_left}，消失={result.missing}，总数={len(candidates)}",
+                    )
+                    last_progress = now
+                elif now - last_progress >= self.config.scan_progress_interval_seconds:
+                    self._log(
+                        "info",
+                        f"【稳定检测进度】稳定={result.stable}, 待检测={pending_left}, "
+                        f"消失={result.missing}, 总数={len(candidates)}",
+                    )
+                    last_progress = now
 
             if pending_left == 0:
                 break
@@ -416,15 +472,13 @@ class JavOrganizerProcessor:
             return
 
         self._log("info", f"【处理阶段】开始，待处理={total}")
+        last_progress = time.time()
         for index, candidate in enumerate(stable_candidates, start=1):
             if self._should_abort_round():
                 self._log("info", "【处理阶段】收到停止信号，终止后续文件处理。")
                 break
 
-            self._log(
-                "info",
-                f"【处理进度】{index}/{total} 开始处理：{candidate.path}",
-            )
+            self._log_detail(f"【处理】{index}/{total} 开始：{candidate.path}")
             candidate.status = CandidateStatus.PROCESSING
             try:
                 self.storage.mark_status(
@@ -467,7 +521,7 @@ class JavOrganizerProcessor:
                         result,
                     )
                     self._last_refresh_dest_path = str(Path(target_path).parent)
-                self._log("info", f"【处理成功】{candidate.path} -> {target_path}")
+                self._log_detail(f"【处理成功】{candidate.path} -> {target_path}")
             else:
                 candidate.status = CandidateStatus.FAILED
                 candidate.error = error
@@ -486,11 +540,15 @@ class JavOrganizerProcessor:
                     f"【处理失败】{candidate.path} error={error} retry_count={retry_count}",
                 )
 
-            self._log(
-                "info",
-                f"【处理进度】已完成={result.processed}/{total}, "
-                f"成功={result.success}, 失败={result.failed}",
-            )
+            if not self._verbose_file_logs:
+                last_progress = self._tick_phase_progress(
+                    "处理进度",
+                    last_progress,
+                    已完成=result.processed,
+                    总数=total,
+                    成功=result.success,
+                    失败=result.failed,
+                )
 
     def _process_file(self, candidate: RoundCandidate) -> tuple[bool, str, Optional[Path], str]:
         path = candidate.path
@@ -501,11 +559,11 @@ class JavOrganizerProcessor:
 
         code = extract_jav_code(path.name)
         if not code:
-            self._log("info", f"未识别编号，进入保底：{path}")
+            self._log_detail(f"未识别编号，进入保底：{path}")
             target_path = self._fallback(path, "未识别影片编码")
             return True, "", target_path, ""
 
-        self._log("debug", f"识别编号：path={path}, code={code}")
+        self._log_detail(f"识别编号：path={path}, code={code}")
         metadata = self.scraper.scrape(code)
         if not metadata:
             if self.config.scrape_fail_policy == "skip":
@@ -523,7 +581,7 @@ class JavOrganizerProcessor:
 
     def _fallback(self, path: Path, reason: str) -> Path:
         target_dir, target_video = self._fallback_target(path)
-        self._log("info", f"保底目标：dir={target_dir}, file={target_video.name}, reason={reason}")
+        self._log_detail(f"保底目标：dir={target_dir}, file={target_video.name}, reason={reason}")
         info = video_summary(path)
         metadata = fallback_metadata(path, info)
         write_movie_nfo(target_dir / "movie.nfo", metadata, str(path), info)
@@ -621,7 +679,7 @@ class JavOrganizerProcessor:
             error=error,
         )
         result.history_saved += 1
-        self._log("debug", f"已写入历史：status={status}, src={source_path}, dest={target_path}")
+        self._log_detail(f"已写入历史：status={status}, src={source_path}, dest={target_path}")
         if self.config.moviepilot_sync_func:
             try:
                 synced = bool(
@@ -633,9 +691,10 @@ class JavOrganizerProcessor:
                         mode=self.config.move_mode,
                         success=True,
                         errmsg=error or None,
+                        verbose_log=self._verbose_file_logs,
                     )
                 )
-                self._log("debug", f"MoviePilot 记录同步：synced={synced}, src={source_path}")
+                self._log_detail(f"MoviePilot 记录同步：synced={synced}, src={source_path}")
             except Exception as exc:
                 self._log("warning", f"同步 MoviePilot 整理记录失败：{exc}")
 
@@ -679,7 +738,35 @@ class JavOrganizerProcessor:
     def _should_abort_round(self) -> bool:
         return self._stop_event.is_set()
 
+    def _apply_round_log_mode(self, candidate_count: int) -> None:
+        self._verbose_file_logs = candidate_count < VERBOSE_CANDIDATE_THRESHOLD
+        if self._verbose_file_logs:
+            mode = "逐文件 INFO"
+        else:
+            mode = f"定期进度 INFO（间隔={self.config.scan_progress_interval_seconds}s，单文件 DEBUG）"
+        self._log(
+            "info",
+            f"【日志模式】本轮过滤后候选={candidate_count}，"
+            f"扫描/稳定检测/处理采用：{mode}",
+        )
+
+    def _detail_level(self) -> str:
+        return "info" if self._verbose_file_logs else "debug"
+
+    def _log_detail(self, message: str) -> None:
+        self._log(self._detail_level(), message)
+
+    def _tick_phase_progress(self, label: str, last_progress: float, **stats: int) -> float:
+        now = time.time()
+        if now - last_progress >= self.config.scan_progress_interval_seconds:
+            parts = ", ".join(f"{key}={value}" for key, value in stats.items())
+            self._log("info", f"【{label}】{parts}")
+            return now
+        return last_progress
+
     def _tick_scan_progress(self, result: ScanResult, last_progress: float) -> float:
+        if self._verbose_file_logs:
+            return last_progress
         now = time.time()
         if now - last_progress >= self.config.scan_progress_interval_seconds:
             self._log_scan_progress(result)
