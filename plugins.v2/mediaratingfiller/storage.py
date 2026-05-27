@@ -340,6 +340,22 @@ class RatingStorage:
             ).fetchall()
         return {row["status"]: int(row["cnt"]) for row in rows}
 
+    def list_distinct_values(self, column: str, limit: int = 12) -> list[str]:
+        allowed = {"country", "new_rating", "status", "year", "media_type"}
+        if column not in allowed:
+            return []
+        sql = f"""
+            SELECT {column} AS value, COUNT(*) AS cnt
+            FROM rating_records
+            WHERE {column} IS NOT NULL AND TRIM({column}) != ''
+            GROUP BY {column}
+            ORDER BY cnt DESC, value ASC
+            LIMIT ?
+        """
+        with self._connect() as conn:
+            rows = conn.execute(sql, (max(1, limit),)).fetchall()
+        return [str(row["value"]) for row in rows if row["value"] is not None]
+
     def dump_cache_json(self, cache_key: str) -> dict[str, Any]:
         row = self.get_cache(cache_key)
         if not row or not row.get("response_json"):
