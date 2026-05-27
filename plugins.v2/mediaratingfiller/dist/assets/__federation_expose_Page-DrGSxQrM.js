@@ -21,24 +21,32 @@ const _export_sfc = (sfc, props) => {
   return target;
 };
 
-const {toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,resolveComponent:_resolveComponent,withCtx:_withCtx,openBlock:_openBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,createVNode:_createVNode,createElementVNode:_createElementVNode,createElementBlock:_createElementBlock} = await importShared('vue');
+const {toDisplayString:_toDisplayString,createTextVNode:_createTextVNode,resolveComponent:_resolveComponent,withCtx:_withCtx,openBlock:_openBlock,createBlock:_createBlock,createCommentVNode:_createCommentVNode,createVNode:_createVNode,createElementVNode:_createElementVNode,createElementBlock:_createElementBlock,renderList:_renderList,Fragment:_Fragment} = await importShared('vue');
 
 
 const _hoisted_1 = { class: "media-rating-filler-page pa-2" };
-const _hoisted_2 = ["title"];
-const _hoisted_3 = { class: "d-flex align-center justify-space-between flex-wrap ga-3 mt-3 px-1" };
-const _hoisted_4 = { class: "text-caption text-medium-emphasis" };
-const _hoisted_5 = { class: "d-flex align-center ga-3 flex-wrap" };
-const _hoisted_6 = { class: "mb-3 text-body-2" };
-const _hoisted_7 = {
+const _hoisted_2 = {
+  key: 2,
+  class: "text-caption text-medium-emphasis mb-2 px-1"
+};
+const _hoisted_3 = ["title"];
+const _hoisted_4 = { class: "d-flex align-center justify-space-between flex-wrap ga-3 mt-3 px-1" };
+const _hoisted_5 = { class: "text-caption text-medium-emphasis" };
+const _hoisted_6 = { class: "d-flex align-center ga-3 flex-wrap" };
+const _hoisted_7 = { class: "mb-3 text-body-2" };
+const _hoisted_8 = {
   key: 0,
   class: "mb-3 text-caption text-medium-emphasis"
 };
+const _hoisted_9 = {
+  key: 1,
+  class: "mb-3 batch-titles text-caption text-medium-emphasis"
+};
+const _hoisted_10 = { key: 0 };
 
 const {computed,onMounted,reactive,ref} = await importShared('vue');
 
 const PLUGIN_ID = 'MediaRatingFiller';
-
 
 const _sfc_main = {
   __name: 'Page',
@@ -50,6 +58,8 @@ const _sfc_main = {
 },
   emits: ['action', 'switch', 'close'],
   setup(__props, { emit: __emit }) {
+
+const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
 const props = __props;
 
@@ -78,8 +88,9 @@ const filters = reactive({
 });
 
 const showEditDialog = ref(false);
-const editingItem = ref(null);
+const editingItems = ref([]);
 const editRating = ref('');
+const selected = ref([]);
 const page = ref(1);
 const pageSize = ref(20);
 
@@ -154,6 +165,28 @@ const pageRangeText = computed(() => {
   return `第 ${start}-${end} 条，共 ${total} 条`
 });
 
+const isBatchEdit = computed(() => editingItems.value.length > 1);
+
+const editDialogTitle = computed(() => (isBatchEdit.value ? '批量修改分级' : '手动修改分级'));
+
+const editDialogSummary = computed(() => {
+  if (!editingItems.value.length) {
+    return ''
+  }
+  if (isBatchEdit.value) {
+    return `已选 ${editingItems.value.length} 条记录，将统一修改为所选分级`
+  }
+  return editingItems.value[0]?.title || ''
+});
+
+const selectedCountText = computed(() => {
+  const count = selected.value.length;
+  if (count <= 0) {
+    return ''
+  }
+  return `已勾选 ${count} 条（点击任意勾选行的「修改分级」可批量修改）`
+});
+
 function displayValue(value) {
   return value || '-'
 }
@@ -176,6 +209,7 @@ async function loadRecords() {
     const response = await props.api.get(`${pluginBase.value}/records`, { params });
     const data = unwrapResponse(response) || {};
     items.value = data.items || [];
+    selected.value = [];
     stats.value = {
       filtered_count: 0,
       total_count: 0,
@@ -238,19 +272,21 @@ function resolveEditRating(raw) {
 }
 
 function openEditDialog(item) {
-  editingItem.value = item;
+  const selectedIds = new Set(selected.value.map((row) => row.id));
+  const batchItems = selectedIds.has(item.id) && selected.value.length > 1 ? [...selected.value] : [item];
+  editingItems.value = batchItems;
   editRating.value = resolveEditRating(item.new_rating || item.old_rating);
   showEditDialog.value = true;
 }
 
 function closeEditDialog() {
   showEditDialog.value = false;
-  editingItem.value = null;
+  editingItems.value = [];
   editRating.value = '';
 }
 
 async function saveRating() {
-  if (!editingItem.value) {
+  if (!editingItems.value.length) {
     return
   }
   const rating = String(editRating.value || '').trim();
@@ -262,13 +298,24 @@ async function saveRating() {
   error.value = '';
   message.value = '';
   try {
-    const response = await props.api.post(`${pluginBase.value}/records/update`, {
-      id: editingItem.value.id,
-      rating,
-    });
-    unwrapResponse(response);
-    message.value = '手动修改分级成功';
+    const ids = editingItems.value.map((item) => item.id);
+    const payload = ids.length > 1 ? { ids, rating } : { id: ids[0], rating };
+    const response = await props.api.post(`${pluginBase.value}/records/update`, payload);
+    const data = unwrapResponse(response);
+    if (response?.message) {
+      message.value = response.message;
+    } else if (ids.length > 1) {
+      message.value = `批量修改成功（${ids.length} 条）`;
+    } else {
+      message.value = '手动修改分级成功';
+    }
+    if (data?.failed_count > 0 && data?.errors?.length) {
+      error.value = data.errors.slice(0, 3).join('；');
+    } else if (data?.failed_count > 0) {
+      error.value = `有 ${data.failed_count} 条记录修改失败`;
+    }
     closeEditDialog();
+    selected.value = [];
     await loadRecords();
   } catch (err) {
     error.value = err?.message || '手动修改分级失败';
@@ -341,7 +388,7 @@ return (_ctx, _cache) => {
       class: "mb-4 pa-4"
     }, {
       default: _withCtx(() => [
-        _cache[11] || (_cache[11] = _createElementVNode("div", { class: "text-subtitle-2 mb-3" }, "组合筛选", -1)),
+        _cache[12] || (_cache[12] = _createElementVNode("div", { class: "text-subtitle-2 mb-3" }, "组合筛选", -1)),
         _createVNode(_component_VRow, { dense: "" }, {
           default: _withCtx(() => [
             _createVNode(_component_VCol, {
@@ -452,7 +499,7 @@ return (_ctx, _cache) => {
                   loading: loading.value,
                   onClick: searchRecords
                 }, {
-                  default: _withCtx(() => [...(_cache[9] || (_cache[9] = [
+                  default: _withCtx(() => [...(_cache[10] || (_cache[10] = [
                     _createTextVNode("查询", -1)
                   ]))]),
                   _: 1
@@ -462,7 +509,7 @@ return (_ctx, _cache) => {
                   disabled: loading.value,
                   onClick: clearFilters
                 }, {
-                  default: _withCtx(() => [...(_cache[10] || (_cache[10] = [
+                  default: _withCtx(() => [...(_cache[11] || (_cache[11] = [
                     _createTextVNode("清空", -1)
                   ]))]),
                   _: 1
@@ -476,10 +523,18 @@ return (_ctx, _cache) => {
       ]),
       _: 1
     }),
+    (selectedCountText.value)
+      ? (_openBlock(), _createElementBlock("div", _hoisted_2, _toDisplayString(selectedCountText.value), 1))
+      : _createCommentVNode("", true),
     _createVNode(_component_VDataTable, {
+      modelValue: selected.value,
+      "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((selected).value = $event)),
       headers: headers,
       items: items.value,
       loading: loading.value,
+      "show-select": "",
+      "item-value": "id",
+      "return-object": "",
       density: "compact",
       class: "history-table",
       "items-per-page": "-1",
@@ -489,7 +544,7 @@ return (_ctx, _cache) => {
         _createElementVNode("span", {
           class: "path-cell",
           title: item.media_path || item.nfo_path || ''
-        }, _toDisplayString(displayValue(item.media_path || item.nfo_path)), 9, _hoisted_2)
+        }, _toDisplayString(displayValue(item.media_path || item.nfo_path)), 9, _hoisted_3)
       ]),
       "item.old_rating": _withCtx(({ item }) => [
         _createTextVNode(_toDisplayString(displayValue(item.old_rating)), 1)
@@ -507,30 +562,30 @@ return (_ctx, _cache) => {
           color: "primary",
           onClick: $event => (openEditDialog(item))
         }, {
-          default: _withCtx(() => [...(_cache[12] || (_cache[12] = [
+          default: _withCtx(() => [...(_cache[13] || (_cache[13] = [
             _createTextVNode("修改分级", -1)
           ]))]),
           _: 1
         }, 8, ["onClick"])
       ]),
-      "no-data": _withCtx(() => [...(_cache[13] || (_cache[13] = [
+      "no-data": _withCtx(() => [...(_cache[14] || (_cache[14] = [
         _createElementVNode("div", { class: "text-medium-emphasis py-6 text-center" }, "没有符合筛选条件的历史记录", -1)
       ]))]),
       _: 1
-    }, 8, ["items", "loading"]),
-    _createElementVNode("div", _hoisted_3, [
-      _createElementVNode("div", _hoisted_4, _toDisplayString(pageRangeText.value), 1),
-      _createElementVNode("div", _hoisted_5, [
+    }, 8, ["modelValue", "items", "loading"]),
+    _createElementVNode("div", _hoisted_4, [
+      _createElementVNode("div", _hoisted_5, _toDisplayString(pageRangeText.value), 1),
+      _createElementVNode("div", _hoisted_6, [
         _createVNode(_component_VSelect, {
           "model-value": pageSize.value,
-          items: _ctx.PAGE_SIZE_OPTIONS,
+          items: PAGE_SIZE_OPTIONS,
           label: "每页条数",
           variant: "outlined",
           density: "compact",
           "hide-details": "",
           style: {"min-width":"110px"},
           "onUpdate:modelValue": onPageSizeChange
-        }, null, 8, ["model-value", "items"]),
+        }, null, 8, ["model-value"]),
         _createVNode(_component_VPagination, {
           "model-value": page.value,
           length: totalPages.value,
@@ -542,27 +597,39 @@ return (_ctx, _cache) => {
     ]),
     _createVNode(_component_VDialog, {
       modelValue: showEditDialog.value,
-      "onUpdate:modelValue": _cache[8] || (_cache[8] = $event => ((showEditDialog).value = $event)),
-      "max-width": "480"
+      "onUpdate:modelValue": _cache[9] || (_cache[9] = $event => ((showEditDialog).value = $event)),
+      "max-width": "520"
     }, {
       default: _withCtx(() => [
         _createVNode(_component_VCard, null, {
           default: _withCtx(() => [
             _createVNode(_component_VCardTitle, null, {
-              default: _withCtx(() => [...(_cache[14] || (_cache[14] = [
-                _createTextVNode("手动修改分级", -1)
-              ]))]),
+              default: _withCtx(() => [
+                _createTextVNode(_toDisplayString(editDialogTitle.value), 1)
+              ]),
               _: 1
             }),
             _createVNode(_component_VCardText, null, {
               default: _withCtx(() => [
-                _createElementVNode("div", _hoisted_6, _toDisplayString(editingItem.value?.title || ''), 1),
-                (editingItem.value?.new_rating || editingItem.value?.old_rating)
-                  ? (_openBlock(), _createElementBlock("div", _hoisted_7, " 当前分级：" + _toDisplayString(editingItem.value?.new_rating || editingItem.value?.old_rating), 1))
+                _createElementVNode("div", _hoisted_7, _toDisplayString(editDialogSummary.value), 1),
+                (!isBatchEdit.value && (editingItems.value[0]?.new_rating || editingItems.value[0]?.old_rating))
+                  ? (_openBlock(), _createElementBlock("div", _hoisted_8, " 当前分级：" + _toDisplayString(editingItems.value[0]?.new_rating || editingItems.value[0]?.old_rating), 1))
+                  : _createCommentVNode("", true),
+                (isBatchEdit.value)
+                  ? (_openBlock(), _createElementBlock("div", _hoisted_9, [
+                      (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(editingItems.value.slice(0, 8), (item) => {
+                        return (_openBlock(), _createElementBlock("div", {
+                          key: item.id
+                        }, "· " + _toDisplayString(item.title || item.media_path || item.id), 1))
+                      }), 128)),
+                      (editingItems.value.length > 8)
+                        ? (_openBlock(), _createElementBlock("div", _hoisted_10, "… 另有 " + _toDisplayString(editingItems.value.length - 8) + " 条", 1))
+                        : _createCommentVNode("", true)
+                    ]))
                   : _createCommentVNode("", true),
                 _createVNode(_component_VSelect, {
                   modelValue: editRating.value,
-                  "onUpdate:modelValue": _cache[7] || (_cache[7] = $event => ((editRating).value = $event)),
+                  "onUpdate:modelValue": _cache[8] || (_cache[8] = $event => ((editRating).value = $event)),
                   items: RATING_OPTIONS,
                   "item-title": "title",
                   "item-value": "value",
@@ -591,9 +658,9 @@ return (_ctx, _cache) => {
                   loading: saving.value,
                   onClick: saveRating
                 }, {
-                  default: _withCtx(() => [...(_cache[16] || (_cache[16] = [
-                    _createTextVNode("保存", -1)
-                  ]))]),
+                  default: _withCtx(() => [
+                    _createTextVNode(_toDisplayString(isBatchEdit.value ? `保存（${editingItems.value.length} 条）` : '保存'), 1)
+                  ]),
                   _: 1
                 }, 8, ["loading"])
               ]),
@@ -610,6 +677,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-482215bb"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-3d660d03"]]);
 
 export { Page as default };

@@ -1,13 +1,17 @@
 
-.history-table[data-v-482215bb] {
+.history-table[data-v-3d660d03] {
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 8px;
 }
-.path-cell[data-v-482215bb] {
+.path-cell[data-v-3d660d03] {
   display: inline-block;
   max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: bottom;
+}
+.batch-titles[data-v-3d660d03] {
+  max-height: 160px;
+  overflow-y: auto;
 }

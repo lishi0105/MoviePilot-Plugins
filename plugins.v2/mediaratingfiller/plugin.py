@@ -141,7 +141,7 @@ class MediaRatingFiller(_PluginBase):
                 "endpoint": self.api_update_rating,
                 "methods": ["POST"],
                 "auth": "bear",
-                "summary": "手动修改分级",
+                "summary": "手动修改分级（支持单条或批量 ids）",
             },
             {
                 "path": "/history/clear",
@@ -275,12 +275,41 @@ class MediaRatingFiller(_PluginBase):
 
     def api_update_rating(self, payload: Optional[dict] = Body(default=None)) -> dict[str, Any]:
         payload = payload or {}
-        record_id = self._safe_int(payload.get("id"), 0)
         rating = (payload.get("rating") or payload.get("new_rating") or "").strip()
-        if not record_id:
-            return {"success": False, "message": "缺少记录 ID"}
         if not rating:
             return {"success": False, "message": "分级不能为空"}
+
+        raw_ids = payload.get("ids")
+        if isinstance(raw_ids, list) and raw_ids:
+            record_ids = [self._safe_int(item, 0) for item in raw_ids]
+            record_ids = [item for item in record_ids if item > 0]
+            if not record_ids:
+                return {"success": False, "message": "缺少有效记录 ID"}
+            success_count = 0
+            failed_count = 0
+            errors: list[str] = []
+            for record_id in record_ids:
+                try:
+                    self.manual_update_rating(record_id, rating)
+                    success_count += 1
+                except Exception as exc:
+                    failed_count += 1
+                    errors.append(str(exc))
+                    plugin_logger.error(f"{LOG_PREFIX}批量修改分级失败（ID={record_id}）：{exc}")
+            message = f"批量修改完成：成功 {success_count} 条，失败 {failed_count} 条"
+            return {
+                "success": True,
+                "message": message,
+                "data": {
+                    "success_count": success_count,
+                    "failed_count": failed_count,
+                    "errors": errors[:20],
+                },
+            }
+
+        record_id = self._safe_int(payload.get("id"), 0)
+        if not record_id:
+            return {"success": False, "message": "缺少记录 ID"}
         try:
             self.manual_update_rating(record_id, rating)
             return {"success": True, "message": "手动修改分级成功"}

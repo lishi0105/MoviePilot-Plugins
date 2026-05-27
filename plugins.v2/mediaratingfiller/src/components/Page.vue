@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { unwrapResponse } from '../utils/api.js'
 
 const PLUGIN_ID = 'MediaRatingFiller'
+const PAGE_SIZE_OPTIONS = [20, 50, 100]
 
 const props = defineProps({
   api: {
@@ -36,8 +37,9 @@ const filters = reactive({
 })
 
 const showEditDialog = ref(false)
-const editingItem = ref(null)
+const editingItems = ref([])
 const editRating = ref('')
+const selected = ref([])
 const page = ref(1)
 const pageSize = ref(20)
 
@@ -112,6 +114,28 @@ const pageRangeText = computed(() => {
   return `第 ${start}-${end} 条，共 ${total} 条`
 })
 
+const isBatchEdit = computed(() => editingItems.value.length > 1)
+
+const editDialogTitle = computed(() => (isBatchEdit.value ? '批量修改分级' : '手动修改分级'))
+
+const editDialogSummary = computed(() => {
+  if (!editingItems.value.length) {
+    return ''
+  }
+  if (isBatchEdit.value) {
+    return `已选 ${editingItems.value.length} 条记录，将统一修改为所选分级`
+  }
+  return editingItems.value[0]?.title || ''
+})
+
+const selectedCountText = computed(() => {
+  const count = selected.value.length
+  if (count <= 0) {
+    return ''
+  }
+  return `已勾选 ${count} 条（点击任意勾选行的「修改分级」可批量修改）`
+})
+
 function displayValue(value) {
   return value || '-'
 }
@@ -134,6 +158,7 @@ async function loadRecords() {
     const response = await props.api.get(`${pluginBase.value}/records`, { params })
     const data = unwrapResponse(response) || {}
     items.value = data.items || []
+    selected.value = []
     stats.value = {
       filtered_count: 0,
       total_count: 0,
@@ -196,19 +221,21 @@ function resolveEditRating(raw) {
 }
 
 function openEditDialog(item) {
-  editingItem.value = item
+  const selectedIds = new Set(selected.value.map((row) => row.id))
+  const batchItems = selectedIds.has(item.id) && selected.value.length > 1 ? [...selected.value] : [item]
+  editingItems.value = batchItems
   editRating.value = resolveEditRating(item.new_rating || item.old_rating)
   showEditDialog.value = true
 }
 
 function closeEditDialog() {
   showEditDialog.value = false
-  editingItem.value = null
+  editingItems.value = []
   editRating.value = ''
 }
 
 async function saveRating() {
-  if (!editingItem.value) {
+  if (!editingItems.value.length) {
     return
   }
   const rating = String(editRating.value || '').trim()
@@ -220,13 +247,24 @@ async function saveRating() {
   error.value = ''
   message.value = ''
   try {
-    const response = await props.api.post(`${pluginBase.value}/records/update`, {
-      id: editingItem.value.id,
-      rating,
-    })
-    unwrapResponse(response)
-    message.value = '手动修改分级成功'
+    const ids = editingItems.value.map((item) => item.id)
+    const payload = ids.length > 1 ? { ids, rating } : { id: ids[0], rating }
+    const response = await props.api.post(`${pluginBase.value}/records/update`, payload)
+    const data = unwrapResponse(response)
+    if (response?.message) {
+      message.value = response.message
+    } else if (ids.length > 1) {
+      message.value = `批量修改成功（${ids.length} 条）`
+    } else {
+      message.value = '手动修改分级成功'
+    }
+    if (data?.failed_count > 0 && data?.errors?.length) {
+      error.value = data.errors.slice(0, 3).join('；')
+    } else if (data?.failed_count > 0) {
+      error.value = `有 ${data.failed_count} 条记录修改失败`
+    }
     closeEditDialog()
+    selected.value = []
     await loadRecords()
   } catch (err) {
     error.value = err?.message || '手动修改分级失败'
@@ -296,10 +334,18 @@ onMounted(loadRecords)
       </VRow>
     </VCard>
 
+    <div v-if="selectedCountText" class="text-caption text-medium-emphasis mb-2 px-1">
+      {{ selectedCountText }}
+    </div>
+
     <VDataTable
+      v-model="selected"
       :headers="headers"
       :items="items"
       :loading="loading"
+      show-select
+      item-value="id"
+      return-object
       density="compact"
       class="history-table"
       items-per-page="-1"
@@ -350,15 +396,22 @@ onMounted(loadRecords)
       </div>
     </div>
 
-    <VDialog v-model="showEditDialog" max-width="480">
+    <VDialog v-model="showEditDialog" max-width="520">
       <VCard>
-        <VCardTitle>手动修改分级</VCardTitle>
+        <VCardTitle>{{ editDialogTitle }}</VCardTitle>
         <VCardText>
           <div class="mb-3 text-body-2">
-            {{ editingItem?.title || '' }}
+            {{ editDialogSummary }}
           </div>
-          <div v-if="editingItem?.new_rating || editingItem?.old_rating" class="mb-3 text-caption text-medium-emphasis">
-            当前分级：{{ editingItem?.new_rating || editingItem?.old_rating }}
+          <div
+            v-if="!isBatchEdit && (editingItems[0]?.new_rating || editingItems[0]?.old_rating)"
+            class="mb-3 text-caption text-medium-emphasis"
+          >
+            当前分级：{{ editingItems[0]?.new_rating || editingItems[0]?.old_rating }}
+          </div>
+          <div v-if="isBatchEdit" class="mb-3 batch-titles text-caption text-medium-emphasis">
+            <div v-for="item in editingItems.slice(0, 8)" :key="item.id">· {{ item.title || item.media_path || item.id }}</div>
+            <div v-if="editingItems.length > 8">… 另有 {{ editingItems.length - 8 }} 条</div>
           </div>
           <VSelect
             v-model="editRating"
@@ -374,7 +427,9 @@ onMounted(loadRecords)
         <VCardActions>
           <VSpacer />
           <VBtn variant="text" @click="closeEditDialog">取消</VBtn>
-          <VBtn color="primary" :loading="saving" @click="saveRating">保存</VBtn>
+          <VBtn color="primary" :loading="saving" @click="saveRating">
+            {{ isBatchEdit ? `保存（${editingItems.length} 条）` : '保存' }}
+          </VBtn>
         </VCardActions>
       </VCard>
     </VDialog>
@@ -394,5 +449,10 @@ onMounted(loadRecords)
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: bottom;
+}
+
+.batch-titles {
+  max-height: 160px;
+  overflow-y: auto;
 }
 </style>
