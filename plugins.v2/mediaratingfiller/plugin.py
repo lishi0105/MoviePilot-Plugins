@@ -49,36 +49,6 @@ STATUS_LABELS = {
     "manual_failed": "手动失败",
 }
 
-PAGE_FILTERS_KEY = "page_filters"
-PAGE_EDIT_RECORD_KEY = "page_edit_record_id"
-PAGE_RECORD_LIMIT = 100
-PLUGIN_API_PREFIX = "plugin/MediaRatingFiller"
-
-FILTER_FIELDS: tuple[tuple[str, str], ...] = (
-    ("country", "国家地区"),
-    ("new_rating", "新分级"),
-    ("status", "处理状态"),
-    ("year", "年份"),
-    ("media_type", "类型"),
-)
-
-COMMON_RATINGS: tuple[str, ...] = (
-    "G",
-    "PG",
-    "PG-13",
-    "R",
-    "NC-17",
-    "TV-G",
-    "TV-PG",
-    "TV-14",
-    "TV-MA",
-    "NR",
-    "Not Rated",
-    "PG12",
-    "15",
-    "18",
-)
-
 
 class MediaRatingFiller(_PluginBase):
     plugin_name = "影视分级补全"
@@ -153,6 +123,7 @@ class MediaRatingFiller(_PluginBase):
                 "path": "/status",
                 "endpoint": self.api_status,
                 "methods": ["GET"],
+                "auth": "bear",
                 "summary": "插件状态统计",
             },
             {
@@ -168,34 +139,6 @@ class MediaRatingFiller(_PluginBase):
                 "methods": ["POST"],
                 "auth": "bear",
                 "summary": "手动修改分级",
-            },
-            {
-                "path": "/page/filters/set",
-                "endpoint": self.api_page_filter_set,
-                "methods": ["POST", "GET"],
-                "auth": "bear",
-                "summary": "设置数据页筛选条件",
-            },
-            {
-                "path": "/page/filters/clear",
-                "endpoint": self.api_page_filter_clear,
-                "methods": ["POST", "GET"],
-                "auth": "bear",
-                "summary": "清空数据页筛选条件",
-            },
-            {
-                "path": "/page/edit/select",
-                "endpoint": self.api_page_edit_select,
-                "methods": ["POST", "GET"],
-                "auth": "bear",
-                "summary": "选择待手动修改分级的记录",
-            },
-            {
-                "path": "/page/edit/clear",
-                "endpoint": self.api_page_edit_clear,
-                "methods": ["POST", "GET"],
-                "auth": "bear",
-                "summary": "取消手动修改分级",
             },
             {
                 "path": "/history/clear",
@@ -242,7 +185,7 @@ class MediaRatingFiller(_PluginBase):
 
     @staticmethod
     def get_render_mode() -> tuple[str, Optional[str]]:
-        return "vuetify", None
+        return "vue", "dist/assets"
 
     def get_form(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         try:
@@ -252,297 +195,9 @@ class MediaRatingFiller(_PluginBase):
             return self._fallback_form_schema(), self.get_default_config()
 
     def get_page(self) -> list[dict[str, Any]]:
-        try:
-            return self._build_history_page()
-        except Exception as exc:
-            plugin_logger.error(f"{LOG_PREFIX}加载数据页失败：{exc}")
-            return [
-                {
-                    "component": "VAlert",
-                    "props": {"type": "error", "variant": "tonal", "text": f"加载失败：{exc}"},
-                }
-            ]
-
-    def _get_page_filters(self) -> dict[str, str]:
-        raw = self.get_data(PAGE_FILTERS_KEY) if hasattr(self, "get_data") else None
-        if not isinstance(raw, dict):
-            return {}
-        allowed = {field for field, _ in FILTER_FIELDS}
-        return {
-            key: str(value).strip()
-            for key, value in raw.items()
-            if key in allowed and str(value).strip()
-        }
-
-    def _filters_from_page_state(self) -> RecordFilters:
-        page_filters = self._get_page_filters()
-        return RecordFilters(
-            country=page_filters.get("country", ""),
-            new_rating=page_filters.get("new_rating", ""),
-            status=page_filters.get("status", ""),
-            year=page_filters.get("year", ""),
-            media_type=page_filters.get("media_type", ""),
-            limit=PAGE_RECORD_LIMIT,
-        )
+        return []
 
     @classmethod
-    def _page_api_event(cls, path: str, *, method: str = "post", params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-        return {
-            "api": f"{PLUGIN_API_PREFIX}/{path.lstrip('/')}",
-            "method": method,
-            "params": params or {},
-        }
-
-    @classmethod
-    def _page_action_btn(
-        cls,
-        text: str,
-        path: str,
-        *,
-        params: Optional[dict[str, Any]] = None,
-        variant: str = "outlined",
-        size: str = "small",
-        color: Optional[str] = None,
-    ) -> dict[str, Any]:
-        props: dict[str, Any] = {"text": text, "size": size, "variant": variant}
-        if color:
-            props["color"] = color
-        return {
-            "component": "VBtn",
-            "props": props,
-            "events": {"click": cls._page_api_event(path, params=params)},
-        }
-
-    def _filter_option_values(self, storage: RatingStorage, field: str) -> list[str]:
-        if field == "media_type":
-            values = storage.list_distinct_values("media_type", limit=20)
-            return values or ["movie", "tvshow"]
-        if field == "status":
-            values = storage.list_distinct_values("status", limit=20)
-            ordered = list(STATUS_LABELS.keys())
-            merged: list[str] = []
-            for item in ordered + values:
-                if item and item not in merged:
-                    merged.append(item)
-            return merged[:20]
-        return storage.list_distinct_values(field, limit=12)
-
-    @staticmethod
-    def _filter_display_value(field: str, value: str) -> str:
-        if field == "status":
-            return STATUS_LABELS.get(value, value)
-        return value
-
-    def _build_filter_chip(self, field: str, value: str, active: bool) -> dict[str, Any]:
-        return self._page_action_btn(
-            self._filter_display_value(field, value),
-            "page/filters/set",
-            params={field: value},
-            variant="tonal" if active else "outlined",
-            color="primary" if active else None,
-        )
-
-    def _build_filter_section(self, storage: RatingStorage, page_filters: dict[str, str]) -> list[dict[str, Any]]:
-        sections: list[dict[str, Any]] = [
-            {
-                "component": "div",
-                "props": {"class": "text-subtitle-2 mb-2"},
-                "text": "组合筛选（点击标签筛选，再次点击取消）",
-            }
-        ]
-        for field, label in FILTER_FIELDS:
-            options = self._filter_option_values(storage, field)
-            if not options:
-                continue
-            sections.append(
-                {
-                    "component": "div",
-                    "props": {"class": "mb-3"},
-                    "content": [
-                        {
-                            "component": "div",
-                            "props": {"class": "text-caption text-medium-emphasis mb-1"},
-                            "text": label,
-                        },
-                        {
-                            "component": "div",
-                            "props": {"class": "d-flex flex-wrap ga-1"},
-                            "content": [
-                                self._build_filter_chip(field, value, page_filters.get(field) == value)
-                                for value in options
-                            ],
-                        },
-                    ],
-                }
-            )
-        sections.append(
-            {
-                "component": "div",
-                "props": {"class": "d-flex flex-wrap ga-2 mb-2"},
-                "content": [
-                    self._page_action_btn("清空筛选", "page/filters/clear", variant="outlined"),
-                ],
-            }
-        )
-        return sections
-
-    def _build_edit_panel(self, storage: RatingStorage, edit_record_id: int) -> Optional[dict[str, Any]]:
-        record = storage.get_record(edit_record_id)
-        if not record:
-            self.del_data(PAGE_EDIT_RECORD_KEY)
-            return None
-        title = record.get("title") or f"ID {edit_record_id}"
-        current = record.get("new_rating") or record.get("old_rating") or "-"
-        return {
-            "component": "VAlert",
-            "props": {
-                "type": "warning",
-                "variant": "tonal",
-                "class": "mb-4",
-            },
-            "content": [
-                {
-                    "component": "div",
-                    "props": {"class": "mb-2"},
-                    "text": f"正在修改分级：{title}（当前：{current}）",
-                },
-                {
-                    "component": "div",
-                    "props": {"class": "d-flex flex-wrap ga-1 mb-2"},
-                    "content": [
-                        self._page_action_btn(
-                            rating,
-                            "records/update",
-                            params={"id": edit_record_id, "rating": rating},
-                            variant="tonal",
-                            color="primary",
-                        )
-                        for rating in COMMON_RATINGS
-                    ],
-                },
-                self._page_action_btn("取消修改", "page/edit/clear", variant="text"),
-            ],
-        }
-
-    def _build_history_table(self, items: list[dict[str, Any]], edit_record_id: int) -> dict[str, Any]:
-        return {
-            "component": "VTable",
-            "props": {"density": "compact"},
-            "content": [
-                {
-                    "component": "thead",
-                    "content": [
-                        {
-                            "component": "tr",
-                            "content": [
-                                {"component": "th", "text": "标题"},
-                                {"component": "th", "text": "类型"},
-                                {"component": "th", "text": "年份"},
-                                {"component": "th", "text": "原分级"},
-                                {"component": "th", "text": "新分级"},
-                                {"component": "th", "text": "状态"},
-                                {"component": "th", "text": "更新时间"},
-                                {"component": "th", "text": "错误"},
-                                {"component": "th", "text": "操作"},
-                            ],
-                        }
-                    ],
-                },
-                {
-                    "component": "tbody",
-                    "content": [
-                        {
-                            "component": "tr",
-                            "content": [
-                                {"component": "td", "text": item["title"]},
-                                {"component": "td", "text": item["media_type"]},
-                                {"component": "td", "text": item["year"] or "-"},
-                                {"component": "td", "text": item["old_rating"] or "-"},
-                                {"component": "td", "text": item["new_rating"] or "-"},
-                                {"component": "td", "text": item["status_label"]},
-                                {"component": "td", "text": item["updated_at"]},
-                                {"component": "td", "text": item["error"] or "-"},
-                                {
-                                    "component": "td",
-                                    "content": [
-                                        self._page_action_btn(
-                                            "修改分级",
-                                            "page/edit/select",
-                                            params={"id": item["id"]},
-                                            variant="text",
-                                            color="primary" if item["id"] == edit_record_id else None,
-                                        )
-                                    ],
-                                },
-                            ],
-                        }
-                        for item in items
-                    ],
-                },
-            ],
-        }
-
-    def _build_history_page(self) -> list[dict[str, Any]]:
-        storage = self._ensure_storage()
-        page_filters = self._get_page_filters()
-        filters = self._filters_from_page_state()
-        stats = storage.stats(filters)
-        rows = storage.list_records(filters)
-        items = [self._format_record_row(row) for row in rows]
-        edit_record_id = self._safe_int(self.get_data(PAGE_EDIT_RECORD_KEY) if hasattr(self, "get_data") else 0, 0)
-
-        active_filter_text = " | ".join(
-            f"{label}={self._filter_display_value(field, value)}"
-            for field, label in FILTER_FIELDS
-            if (value := page_filters.get(field))
-        ) or "无"
-
-        page: list[dict[str, Any]] = [
-            {
-                "component": "VAlert",
-                "props": {
-                    "type": "info",
-                    "variant": "tonal",
-                    "class": "mb-4",
-                    "text": (
-                        f"筛选结果 {stats.filtered_count} 条 | 总记录 {stats.total_count} 条 | "
-                        f"成功 {stats.success_count} | 失败 {stats.failed_count} | "
-                        f"兜底 {stats.fallback_count} | 手动 {stats.manual_count} | "
-                        f"当前展示 {len(items)} 条（最多 {PAGE_RECORD_LIMIT} 条）"
-                    ),
-                },
-            },
-            {
-                "component": "VCard",
-                "props": {"variant": "outlined", "class": "mb-4 pa-4"},
-                "content": self._build_filter_section(storage, page_filters)
-                + [
-                    {
-                        "component": "div",
-                        "props": {"class": "text-caption text-medium-emphasis"},
-                        "text": f"当前筛选：{active_filter_text}",
-                    }
-                ],
-            },
-        ]
-
-        edit_panel = self._build_edit_panel(storage, edit_record_id) if edit_record_id else None
-        if edit_panel:
-            page.append(edit_panel)
-
-        if not items:
-            page.append(
-                {
-                    "component": "VAlert",
-                    "props": {"type": "warning", "variant": "tonal", "text": "没有符合筛选条件的历史记录。"},
-                }
-            )
-            return page
-
-        page.append(self._build_history_table(items, edit_record_id))
-        return page
-
-    @staticmethod
     def get_default_config(cls) -> dict[str, Any]:
         return {
             "enabled": False,
@@ -615,48 +270,10 @@ class MediaRatingFiller(_PluginBase):
             return {"success": False, "message": "分级不能为空"}
         try:
             self.manual_update_rating(record_id, rating)
-            if hasattr(self, "get_data") and self._safe_int(self.get_data(PAGE_EDIT_RECORD_KEY), 0) == record_id:
-                self.del_data(PAGE_EDIT_RECORD_KEY)
             return {"success": True, "message": "手动修改分级成功"}
         except Exception as exc:
             plugin_logger.error(f"{LOG_PREFIX}手动修改分级失败：{exc}")
             return {"success": False, "message": str(exc)}
-
-    def api_page_filter_set(self, **kwargs) -> dict[str, Any]:
-        filters = dict(self._get_page_filters())
-        for field, _ in FILTER_FIELDS:
-            if field not in kwargs:
-                continue
-            value = str(kwargs.get(field) or "").strip()
-            if value and filters.get(field) == value:
-                filters.pop(field, None)
-            elif value:
-                filters[field] = value
-            else:
-                filters.pop(field, None)
-        if hasattr(self, "save_data"):
-            self.save_data(PAGE_FILTERS_KEY, filters)
-        return {"success": True, "data": filters}
-
-    def api_page_filter_clear(self, **kwargs) -> dict[str, Any]:
-        if hasattr(self, "del_data"):
-            self.del_data(PAGE_FILTERS_KEY)
-        return {"success": True, "message": "已清空筛选条件"}
-
-    def api_page_edit_select(self, **kwargs) -> dict[str, Any]:
-        record_id = self._safe_int(kwargs.get("id"), 0)
-        if not record_id:
-            return {"success": False, "message": "缺少记录 ID"}
-        if not self._ensure_storage().get_record(record_id):
-            return {"success": False, "message": "记录不存在"}
-        if hasattr(self, "save_data"):
-            self.save_data(PAGE_EDIT_RECORD_KEY, record_id)
-        return {"success": True, "message": "请选择新的分级"}
-
-    def api_page_edit_clear(self, **kwargs) -> dict[str, Any]:
-        if hasattr(self, "del_data"):
-            self.del_data(PAGE_EDIT_RECORD_KEY)
-        return {"success": True, "message": "已取消修改"}
 
     def api_clear_history(self) -> dict[str, Any]:
         cleared = self._ensure_storage().clear_history()
