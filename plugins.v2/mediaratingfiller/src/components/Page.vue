@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { unwrapResponse } from '../utils/api.js'
 
 const PLUGIN_ID = 'MediaRatingFiller'
-const PAGE_LIMIT = 100
+const PAGE_SIZE_OPTIONS = [20, 50, 100]
 
 const STATUS_LABELS = {
   scanned: '已扫描',
@@ -56,12 +56,37 @@ const filters = reactive({
 const showEditDialog = ref(false)
 const editingItem = ref(null)
 const editRating = ref('')
+const page = ref(1)
+const pageSize = ref(20)
 
 const pluginBase = computed(() => `plugin/${PLUGIN_ID}`)
 
 const statusItems = computed(() =>
   Object.entries(STATUS_LABELS).map(([value, title]) => ({ value, title })),
 )
+
+const RATING_OPTIONS = [
+  { title: '儿童可看 (G / PG / TV-G)', value: 'G' },
+  { title: '需家长陪同 (PG-13 / TV-14)', value: 'PG-13' },
+  { title: '未成年禁止 (R / NC-17 / TV-MA)', value: 'R' },
+]
+
+const RATING_VALUE_ALIASES = {
+  G: 'G',
+  PG: 'G',
+  'TV-Y': 'G',
+  'TV-G': 'G',
+  'TV-PG': 'G',
+  'PG-13': 'PG-13',
+  'TV-14': 'PG-13',
+  PG12: 'PG-13',
+  '12': 'PG-13',
+  R: 'R',
+  'NC-17': 'R',
+  'TV-MA': 'R',
+  '18': 'R',
+  NR: 'R',
+}
 
 const mediaTypeItems = [
   { value: 'movie', title: 'movie' },
@@ -82,7 +107,25 @@ const headers = [
 
 const statsText = computed(() => {
   const s = stats.value
-  return `筛选结果 ${s.filtered_count} 条 | 总记录 ${s.total_count} 条 | 成功 ${s.success_count} | 失败 ${s.failed_count} | 兜底 ${s.fallback_count} | 手动 ${s.manual_count} | 当前展示 ${items.value.length} 条（最多 ${PAGE_LIMIT} 条）`
+  return `筛选结果 ${s.filtered_count} 条 | 总记录 ${s.total_count} 条 | 成功 ${s.success_count} | 失败 ${s.failed_count} | 兜底 ${s.fallback_count} | 手动 ${s.manual_count}`
+})
+
+const totalPages = computed(() => {
+  const total = stats.value.filtered_count || 0
+  if (total <= 0) {
+    return 1
+  }
+  return Math.ceil(total / pageSize.value)
+})
+
+const pageRangeText = computed(() => {
+  const total = stats.value.filtered_count || 0
+  if (total <= 0) {
+    return '暂无记录'
+  }
+  const start = (page.value - 1) * pageSize.value + 1
+  const end = Math.min(page.value * pageSize.value, total)
+  return `第 ${start}-${end} 条，共 ${total} 条`
 })
 
 function displayValue(value) {
@@ -95,8 +138,8 @@ async function loadRecords() {
   message.value = ''
   try {
     const params = {
-      limit: PAGE_LIMIT,
-      offset: 0,
+      limit: pageSize.value,
+      offset: (page.value - 1) * pageSize.value,
     }
     for (const [key, value] of Object.entries(filters)) {
       const text = String(value || '').trim()
@@ -116,6 +159,12 @@ async function loadRecords() {
       manual_count: 0,
       ...(data.stats || {}),
     }
+    const maxPage = Math.max(1, Math.ceil((stats.value.filtered_count || 0) / pageSize.value) || 1)
+    if (page.value > maxPage) {
+      page.value = maxPage
+      loading.value = false
+      return loadRecords()
+    }
     emit('action')
   } catch (err) {
     error.value = err?.message || '加载历史记录失败'
@@ -124,18 +173,47 @@ async function loadRecords() {
   }
 }
 
+function searchRecords() {
+  page.value = 1
+  loadRecords()
+}
+
 function clearFilters() {
   filters.country = ''
   filters.new_rating = ''
   filters.status = ''
   filters.year = ''
   filters.media_type = ''
+  page.value = 1
   loadRecords()
+}
+
+function onPageChange(value) {
+  page.value = value
+  loadRecords()
+}
+
+function onPageSizeChange(value) {
+  pageSize.value = Number(value) || 20
+  page.value = 1
+  loadRecords()
+}
+
+function resolveEditRating(raw) {
+  const text = String(raw || '').trim().toUpperCase()
+  if (!text) {
+    return ''
+  }
+  const matched = RATING_OPTIONS.find((item) => item.value.toUpperCase() === text)
+  if (matched) {
+    return matched.value
+  }
+  return RATING_VALUE_ALIASES[text] || ''
 }
 
 function openEditDialog(item) {
   editingItem.value = item
-  editRating.value = item.new_rating || item.old_rating || ''
+  editRating.value = resolveEditRating(item.new_rating || item.old_rating)
   showEditDialog.value = true
 }
 
@@ -228,7 +306,7 @@ onMounted(loadRecords)
           />
         </VCol>
         <VCol cols="12" md="8" lg="2" class="d-flex align-center ga-2">
-          <VBtn color="primary" :loading="loading" @click="loadRecords">查询</VBtn>
+          <VBtn color="primary" :loading="loading" @click="searchRecords">查询</VBtn>
           <VBtn variant="outlined" :disabled="loading" @click="clearFilters">清空</VBtn>
         </VCol>
       </VRow>
@@ -260,6 +338,29 @@ onMounted(loadRecords)
       </template>
     </VDataTable>
 
+    <div class="d-flex align-center justify-space-between flex-wrap ga-3 mt-3 px-1">
+      <div class="text-caption text-medium-emphasis">{{ pageRangeText }}</div>
+      <div class="d-flex align-center ga-3 flex-wrap">
+        <VSelect
+          :model-value="pageSize"
+          :items="PAGE_SIZE_OPTIONS"
+          label="每页条数"
+          variant="outlined"
+          density="compact"
+          hide-details
+          style="min-width: 110px"
+          @update:model-value="onPageSizeChange"
+        />
+        <VPagination
+          :model-value="page"
+          :length="totalPages"
+          :total-visible="7"
+          density="compact"
+          @update:model-value="onPageChange"
+        />
+      </div>
+    </div>
+
     <VDialog v-model="showEditDialog" max-width="480">
       <VCard>
         <VCardTitle>手动修改分级</VCardTitle>
@@ -267,14 +368,18 @@ onMounted(loadRecords)
           <div class="mb-3 text-body-2">
             {{ editingItem?.title || '' }}
           </div>
-          <VTextField
+          <div v-if="editingItem?.new_rating || editingItem?.old_rating" class="mb-3 text-caption text-medium-emphasis">
+            当前分级：{{ editingItem?.new_rating || editingItem?.old_rating }}
+          </div>
+          <VSelect
             v-model="editRating"
-            label="新分级"
+            :items="RATING_OPTIONS"
+            item-title="title"
+            item-value="value"
+            label="选择新分级"
             variant="outlined"
             density="comfortable"
-            placeholder="如 PG-13 / R / TV-MA"
-            autofocus
-            @keyup.enter="saveRating"
+            placeholder="请选择分级"
           />
         </VCardText>
         <VCardActions>
