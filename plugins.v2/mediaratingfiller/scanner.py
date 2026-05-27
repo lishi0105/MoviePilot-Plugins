@@ -337,7 +337,7 @@ class RatingFillerProcessor:
             summary.failed += 1
             if status == "api_limit":
                 summary.api_limit += 1
-            self._log("warning", f"{LOG_PREFIX}处理失败：标题={meta.title}，原因={error or status}")
+            self._log("warning", f"{LOG_PREFIX}处理失败：标题={meta.title}，文件={meta.nfo_path}，原因={error or status}")
         else:
             summary.skipped += 1
 

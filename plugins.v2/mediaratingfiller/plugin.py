@@ -295,7 +295,9 @@ class MediaRatingFiller(_PluginBase):
                 except Exception as exc:
                     failed_count += 1
                     errors.append(str(exc))
-                    plugin_logger.error(f"{LOG_PREFIX}批量修改分级失败（ID={record_id}）：{exc}")
+                    plugin_logger.error(
+                        f"{LOG_PREFIX}批量修改分级失败（ID={record_id}，文件={self._record_nfo_path(record_id)}）：{exc}"
+                    )
             message = f"批量修改完成：成功 {success_count} 条，失败 {failed_count} 条"
             return {
                 "success": True,
@@ -314,7 +316,7 @@ class MediaRatingFiller(_PluginBase):
             self.manual_update_rating(record_id, rating)
             return {"success": True, "message": "手动修改分级成功"}
         except Exception as exc:
-            plugin_logger.error(f"{LOG_PREFIX}手动修改分级失败：{exc}")
+            plugin_logger.error(f"{LOG_PREFIX}手动修改分级失败（文件={self._record_nfo_path(record_id)}）：{exc}")
             return {"success": False, "message": str(exc)}
 
     def api_clear_history(self) -> dict[str, Any]:
@@ -336,8 +338,15 @@ class MediaRatingFiller(_PluginBase):
             storage.update_manual_rating(record_id, rating, success=True)
             plugin_logger.info(f"{LOG_PREFIX}手动修改分级成功：{record.get('title')} -> {rating}")
         except Exception as exc:
-            storage.update_manual_rating(record_id, rating, success=False, error=str(exc))
-            raise
+            error = f"{exc}（文件：{nfo_path}）"
+            storage.update_manual_rating(record_id, rating, success=False, error=error)
+            raise RuntimeError(error) from exc
+
+    def _record_nfo_path(self, record_id: int) -> str:
+        record = self._ensure_storage().get_record(record_id)
+        if not record:
+            return "-"
+        return record.get("nfo_path") or "-"
 
     def stop_service(self) -> None:
         if self._processor:

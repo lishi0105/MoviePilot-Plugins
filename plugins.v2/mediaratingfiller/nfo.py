@@ -40,7 +40,7 @@ def identify_tvshow_nfo(directory: Path) -> Optional[Path]:
 
 def parse_nfo(nfo_path: Path, media_path: Path, media_type: str) -> NfoMetadata:
     stat = nfo_path.stat()
-    tree = ET.parse(nfo_path)
+    tree = _parse_xml(nfo_path)
     root = tree.getroot()
 
     title = _first_text(root, "title") or _first_text(root, "name") or nfo_path.stem
@@ -77,11 +77,31 @@ def write_rating_to_nfo(nfo_path: Path, rating: str, *, backup: bool = True) -> 
         backup_path = nfo_path.with_name(f"{nfo_path.name}.bak_rating")
         shutil.copy2(nfo_path, backup_path)
 
-    tree = ET.parse(nfo_path)
+    tree = _parse_xml(nfo_path)
     root = tree.getroot()
     _upsert_text(root, "mpaa", rating)
     _upsert_text(root, "certification", rating)
     tree.write(nfo_path, encoding="utf-8", xml_declaration=True)
+
+
+def _parse_xml(nfo_path: Path) -> ET.ElementTree:
+    try:
+        return ET.parse(nfo_path)
+    except ET.ParseError as exc:
+        preview = _file_head_preview(nfo_path)
+        raise ValueError(f"XML 解析失败：{nfo_path}，{exc}，文件开头：{preview}") from exc
+
+
+def _file_head_preview(nfo_path: Path) -> str:
+    try:
+        data = nfo_path.read_bytes()[:80]
+    except OSError as exc:
+        return f"无法读取文件开头：{exc}"
+    if not data:
+        return "空文件"
+    text = data.decode("utf-8", errors="replace")
+    text = text.replace("\r", "\\r").replace("\n", "\\n")
+    return text
 
 
 def _read_existing_rating(root: ET.Element) -> str:
