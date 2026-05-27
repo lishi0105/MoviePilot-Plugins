@@ -12,7 +12,7 @@
 中文名：影视分级补全
 英文名：Media Rating Filler
 插件 ID：media_rating_filler
-目录名：media_rating_filler
+目录名：mediaratingfiller
 ```
 
 核心流程：
@@ -825,7 +825,7 @@ API 调用更可控
 ## 22. 推荐插件目录结构
 
 ```text
-plugins.v2/media_rating_filler/
+plugins.v2/mediaratingfiller/
   __init__.py
   plugin.py
   scanner.py
