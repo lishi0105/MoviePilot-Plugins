@@ -18,7 +18,10 @@ except Exception:  # pragma: no cover
 try:
     from app.log import logger
     from app.plugins import _PluginBase
+    from fastapi import Body
 except Exception:  # pragma: no cover
+    def Body(default=None, **kwargs):  # type: ignore
+        return default
     class _FallbackLogger:
         def info(self, msg): print(msg)
         def warning(self, msg): print(msg)
@@ -240,15 +243,24 @@ class MediaRatingFiller(_PluginBase):
             },
         }
 
-    def api_records(self, **kwargs) -> dict[str, Any]:
+    def api_records(
+        self,
+        country: str = "",
+        new_rating: str = "",
+        status: str = "",
+        year: str = "",
+        media_type: str = "",
+        limit: int = 200,
+        offset: int = 0,
+    ) -> dict[str, Any]:
         filters = RecordFilters(
-            country=(kwargs.get("country") or "").strip(),
-            new_rating=(kwargs.get("new_rating") or "").strip(),
-            status=(kwargs.get("status") or "").strip(),
-            year=(kwargs.get("year") or "").strip(),
-            media_type=(kwargs.get("media_type") or "").strip(),
-            limit=self._safe_int(kwargs.get("limit"), 200),
-            offset=self._safe_int(kwargs.get("offset"), 0),
+            country=(country or "").strip(),
+            new_rating=(new_rating or "").strip(),
+            status=(status or "").strip(),
+            year=(year or "").strip(),
+            media_type=(media_type or "").strip(),
+            limit=self._safe_int(limit, 200),
+            offset=self._safe_int(offset, 0),
         )
         storage = self._ensure_storage()
         rows = storage.list_records(filters)
@@ -261,9 +273,10 @@ class MediaRatingFiller(_PluginBase):
             },
         }
 
-    def api_update_rating(self, **kwargs) -> dict[str, Any]:
-        record_id = self._safe_int(kwargs.get("id"), 0)
-        rating = (kwargs.get("rating") or kwargs.get("new_rating") or "").strip()
+    def api_update_rating(self, payload: Optional[dict] = Body(default=None)) -> dict[str, Any]:
+        payload = payload or {}
+        record_id = self._safe_int(payload.get("id"), 0)
+        rating = (payload.get("rating") or payload.get("new_rating") or "").strip()
         if not record_id:
             return {"success": False, "message": "缺少记录 ID"}
         if not rating:
