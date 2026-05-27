@@ -48,7 +48,7 @@ STATUS_LABELS = {
 class MediaRatingFiller(_PluginBase):
     plugin_name = "影视分级补全"
     plugin_desc = "扫描已整理媒体库，补全 NFO 中缺失的分级信息（OMDb/TMDb/地区兜底）。"
-    plugin_icon = "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/class.png"
+    plugin_icon = "https://raw.githubusercontent.com/lishi0105/MoviePilot-Plugins/main/icons/rating-filler.png"
     plugin_version = "1.0.0"
     plugin_author = "lishi0105"
     author_url = ""
