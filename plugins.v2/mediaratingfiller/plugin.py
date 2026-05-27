@@ -408,16 +408,14 @@ class MediaRatingFiller(_PluginBase):
     def _build_form_schema(cls) -> list[dict[str, Any]]:
         switch_col = {"cols": 12, "md": 4}
         api_key_col = {"cols": 12, "md": 6}
-        param_col = {"cols": 12, "class": "flex-grow-1", "style": "flex: 1 1 0; min-width: 0;"}
+        param_col = {"cols": 12, "md": 4}
         full_col = {"cols": 12}
         row_props = {"class": "mb-4"}
-        outlined = {"variant": "outlined"}
-        switch = {"color": "primary", "hideDetails": True}
 
         def _text_field(model: str, label: str, **extra: Any) -> dict[str, Any]:
             return {
                 "component": "VTextField",
-                "props": {"model": model, "label": label, **outlined, **extra},
+                "props": {"model": model, "label": label, **extra},
             }
 
         return [
@@ -434,7 +432,7 @@ class MediaRatingFiller(_PluginBase):
                                 "content": [
                                     {
                                         "component": "VSwitch",
-                                        "props": {"model": "enabled", "label": "启用插件", **switch},
+                                        "props": {"model": "enabled", "label": "启用插件"},
                                     }
                                 ],
                             },
@@ -444,7 +442,7 @@ class MediaRatingFiller(_PluginBase):
                                 "content": [
                                     {
                                         "component": "VSwitch",
-                                        "props": {"model": "onlyonce", "label": "立即扫描一次", **switch},
+                                        "props": {"model": "onlyonce", "label": "立即扫描一次"},
                                     }
                                 ],
                             },
@@ -457,7 +455,6 @@ class MediaRatingFiller(_PluginBase):
                                         "props": {
                                             "model": "clear_history",
                                             "label": "清空历史记录（保存后生效）",
-                                            **switch,
                                         },
                                     }
                                 ],
@@ -477,7 +474,6 @@ class MediaRatingFiller(_PluginBase):
                                         "props": {
                                             "model": "schedule_enabled",
                                             "label": "启用定时扫描",
-                                            **switch,
                                         },
                                     }
                                 ],
@@ -513,7 +509,7 @@ class MediaRatingFiller(_PluginBase):
                     },
                     {
                         "component": "VRow",
-                        "props": {**row_props, "class": "mb-4 d-flex flex-wrap ga-2"},
+                        "props": row_props,
                         "content": [
                             {
                                 "component": "VCol",
@@ -569,7 +565,6 @@ class MediaRatingFiller(_PluginBase):
                                         "props": {
                                             "model": "library_paths",
                                             "label": "媒体库路径（换行或英文逗号分隔）",
-                                            **outlined,
                                         },
                                     }
                                 ],
@@ -589,7 +584,6 @@ class MediaRatingFiller(_PluginBase):
                                         "props": {
                                             "model": "exclude_dirs",
                                             "label": "排除目录（换行或英文逗号分隔）",
-                                            **outlined,
                                         },
                                     }
                                 ],
