@@ -7,16 +7,22 @@ MoviePilot V2 第三方插件仓库。
 | 序号 | 名称 | 当前版本 | 功能简述 | 站点认证 |
 |:--:|:--|:--:|:--|:--:|
 | 1 | [私密影片整理](javorganizer) | 1.0.0 | 扫描指定目录，识别影片编码，生成 NFO 和图片，并整理到指定媒体库；对无法识别的影片支持保底整理。 | 不需要 |
+| 2 | [影视分级补全](rating_filler) | 1.0.0 | 扫描已整理媒体库，补全 NFO 缺失的分级（OMDb/TMDb/地区兜底），支持历史记录与手动修改。 | 不需要 |
 
 ## 仓库结构
 
 ```text
 plugins.v2/
 ├── README.md
-└── javorganizer/
+├── javorganizer/
+│   ├── __init__.py
+│   ├── plugin.py
+│   ├── requirements.txt
+│   └── ...
+└── rating_filler/
     ├── __init__.py
     ├── plugin.py
-    ├── requirements.txt
+    ├── scanner.py
     └── ...
 ```
 
