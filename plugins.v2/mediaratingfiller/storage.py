@@ -9,6 +9,23 @@ from typing import Any, Optional
 from .models import RecordFilters, RecordStats
 from .utils import now_iso
 
+SUCCESS_STATUSES = (
+    "updated_omdb",
+    "updated_tmdb",
+    "fallback_mainland",
+    "fallback_other",
+    "manual_updated",
+    "skipped_existing",
+)
+FAILED_STATUSES = (
+    "no_imdbid_no_tmdbid",
+    "api_limit",
+    "api_error",
+    "parse_error",
+    "write_error",
+    "manual_failed",
+)
+
 
 class StorageError(Exception):
     """数据库关键错误。"""
@@ -269,28 +286,12 @@ class RatingStorage:
         filters = filters or RecordFilters()
         filtered_count = self.count_records(filters)
         total_count = self.count_records(RecordFilters(limit=1_000_000))
-        success_statuses = (
-            "updated_omdb",
-            "updated_tmdb",
-            "fallback_mainland",
-            "fallback_other",
-            "manual_updated",
-            "skipped_existing",
-        )
-        failed_statuses = (
-            "no_imdbid_no_tmdbid",
-            "api_limit",
-            "api_error",
-            "parse_error",
-            "write_error",
-            "manual_failed",
-        )
         fallback_statuses = ("fallback_mainland", "fallback_other")
         return RecordStats(
             filtered_count=filtered_count,
             total_count=total_count,
-            success_count=self._count_by_statuses(filters, success_statuses),
-            failed_count=self._count_by_statuses(filters, failed_statuses),
+            success_count=self._count_by_statuses(filters, SUCCESS_STATUSES),
+            failed_count=self._count_by_statuses(filters, FAILED_STATUSES),
             fallback_count=self._count_by_statuses(filters, fallback_statuses),
             manual_count=self._count_by_statuses(filters, ("manual_updated",)),
         )
@@ -315,7 +316,6 @@ class RatingStorage:
         mapping = {
             "country": filters.country,
             "new_rating": filters.new_rating,
-            "status": filters.status,
             "year": filters.year,
             "media_type": filters.media_type,
         }
@@ -323,6 +323,15 @@ class RatingStorage:
             if value:
                 clauses.append(f"{column} = ?")
                 params.append(value)
+        status = (filters.status or "").strip()
+        if status == "success":
+            placeholders = ", ".join("?" for _ in SUCCESS_STATUSES)
+            clauses.append(f"status IN ({placeholders})")
+            params.extend(SUCCESS_STATUSES)
+        elif status == "failed":
+            placeholders = ", ".join("?" for _ in FAILED_STATUSES)
+            clauses.append(f"status IN ({placeholders})")
+            params.extend(FAILED_STATUSES)
         if not clauses:
             return "", params
         return " WHERE " + " AND ".join(clauses), params

@@ -619,5 +619,6 @@ class MediaRatingFiller(_PluginBase):
             "status_label": STATUS_LABELS.get(status, status),
             "error": row.get("error") or "",
             "updated_at": row.get("updated_at") or "",
+            "media_path": row.get("media_path") or "",
             "nfo_path": row.get("nfo_path") or "",
         }

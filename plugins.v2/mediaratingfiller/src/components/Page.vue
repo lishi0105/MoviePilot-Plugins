@@ -3,24 +3,6 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { unwrapResponse } from '../utils/api.js'
 
 const PLUGIN_ID = 'MediaRatingFiller'
-const PAGE_SIZE_OPTIONS = [20, 50, 100]
-
-const STATUS_LABELS = {
-  scanned: '已扫描',
-  skipped_existing: '已有分级',
-  queued: '待处理',
-  updated_omdb: 'OMDb写入',
-  updated_tmdb: 'TMDb写入',
-  fallback_mainland: '大陆兜底',
-  fallback_other: '其他兜底',
-  no_imdbid_no_tmdbid: '无ID',
-  api_limit: 'API限额',
-  api_error: 'API失败',
-  parse_error: '解析失败',
-  write_error: '写入失败',
-  manual_updated: '手动修改',
-  manual_failed: '手动失败',
-}
 
 const props = defineProps({
   api: {
@@ -61,9 +43,10 @@ const pageSize = ref(20)
 
 const pluginBase = computed(() => `plugin/${PLUGIN_ID}`)
 
-const statusItems = computed(() =>
-  Object.entries(STATUS_LABELS).map(([value, title]) => ({ value, title })),
-)
+const statusItems = [
+  { title: '成功', value: 'success' },
+  { title: '失败', value: 'failed' },
+]
 
 const RATING_OPTIONS = [
   { title: '儿童可看 (G / PG / TV-G)', value: 'G' },
@@ -95,6 +78,7 @@ const mediaTypeItems = [
 
 const headers = [
   { title: '标题', key: 'title', minWidth: '160px' },
+  { title: '媒体路径', key: 'media_path', minWidth: '200px' },
   { title: '类型', key: 'media_type', width: '80px' },
   { title: '年份', key: 'year', width: '72px' },
   { title: '原分级', key: 'old_rating', width: '88px' },
@@ -321,6 +305,11 @@ onMounted(loadRecords)
       items-per-page="-1"
       hide-default-footer
     >
+      <template #item.media_path="{ item }">
+        <span class="path-cell" :title="item.media_path || item.nfo_path || ''">
+          {{ displayValue(item.media_path || item.nfo_path) }}
+        </span>
+      </template>
       <template #item.old_rating="{ item }">
         {{ displayValue(item.old_rating) }}
       </template>
@@ -396,5 +385,14 @@ onMounted(loadRecords)
 .history-table {
   border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 8px;
+}
+
+.path-cell {
+  display: inline-block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 </style>
